@@ -74,6 +74,10 @@ def set_status(telegram_id: int, status: str):
     with _conn() as c:
         c.execute("UPDATE members SET status=? WHERE telegram_id=?", (status, telegram_id))
 
+def set_zone(telegram_id: int, zone: str):
+    with _conn() as c:
+        c.execute("UPDATE members SET zone=? WHERE telegram_id=?", (zone, telegram_id))
+
 def remove_member(telegram_id: int):
     with _conn() as c:
         c.execute("DELETE FROM members WHERE telegram_id=?", (telegram_id,))
