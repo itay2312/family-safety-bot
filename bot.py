@@ -127,6 +127,58 @@ async def notify_all_approved(bot: Bot, message: str, exclude_id: int = None):
         except Exception as e:
             logger.error(f"Failed to notify {m['name']}: {e}")
 
+async def broadcast_status_board(bot: Bot, event_id: str):
+    """
+    Send a live status board to everyone (members + observers).
+    Called after every response and after 15 min timeout.
+    """
+    members  = db.get_approved_members()
+    # Only show non-observer members on the board
+    checkable = [m for m in members if not is_observer(m)]
+    if not checkable:
+        return
+
+    responses = {r["telegram_id"]: r["response"]
+                 for r in db.get_responses_for_event(event_id)}
+
+    lines = ["📋 *Family Status Update*\n"]
+    all_safe    = True
+    someone_help = False
+
+    for m in checkable:
+        r = responses.get(m["telegram_id"])
+        if r == "ok":
+            emoji = "✅"
+        elif r == "help":
+            emoji = "🆘"
+            someone_help = True
+            all_safe = False
+        else:
+            emoji = "⏳"
+            all_safe = False
+        lines.append(f"{emoji} {m['name']}")
+
+    # Footer line
+    if someone_help:
+        lines.append("\n🚨 *Someone needs help — act immediately!*")
+    elif all_safe:
+        lines.append("\n🎉 *Everyone is safe!*")
+    else:
+        lines.append("\n⏳ _Still waiting for some responses..._")
+
+    board_text = "\n".join(lines)
+
+    # Send to everyone — members + observers
+    for m in members:
+        try:
+            await bot.send_message(
+                chat_id=m["telegram_id"],
+                text=board_text,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Status board failed for {m['name']}: {e}")
+
 # ─────────────────────────────────────────
 # ONBOARDING
 # ─────────────────────────────────────────
@@ -326,6 +378,9 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
+        # Always send updated status board to everyone after any response
+        await broadcast_status_board(ctx.bot, event_id)
+
 # ─────────────────────────────────────────
 # ALERT POLLING
 # ─────────────────────────────────────────
@@ -475,14 +530,11 @@ async def escalation_loop(bot: Bot, event_id: str):
         return
 
     no_resp = db.get_no_response(event_id)
-    # Filter out observers from no-response list
     no_resp = [m for m in no_resp if not is_observer(m)]
 
     if no_resp:
         names = ", ".join(m["name"] for m in no_resp)
         msg   = f"⚠️ *No response yet from:* {names}"
-
-        # Notify admin + observers
         await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="Markdown")
         await notify_observers(bot, msg)
 
@@ -500,6 +552,9 @@ async def escalation_loop(bot: Bot, event_id: str):
                 )
             except Exception:
                 pass
+
+    # Send status board to everyone after 15 min regardless
+    await broadcast_status_board(bot, event_id)
 
     await asyncio.sleep((ESCALATE_MINS - REMINDER_MINS) * 60)
     still = [m for m in db.get_no_response(event_id) if not is_observer(m)]
