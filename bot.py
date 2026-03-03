@@ -266,6 +266,8 @@ async def poll_alerts(app: Application):
                             zones_str   = ", ".join(hit_zones)
                             logger.info(f"🚨 ALERT: {zones_str}")
                             db.log_alert_start()
+                            # Write state for dashboard to read
+                            open(".alert_state", "w").write(f"ALERT|{zones_str}")
                             await app.bot.send_message(
                                 chat_id=ADMIN_ID,
                                 text=f"🚨 *Alert in:* {zones_str}\n\nWaiting for all-clear...",
@@ -276,6 +278,7 @@ async def poll_alerts(app: Application):
                         elapsed = time.time() - (last_alert_time or 0)
                         if elapsed >= COOLDOWN_SECS:
                             alert_state = "IDLE"
+                            open(".alert_state", "w").write("IDLE|")
                             logger.info("✅ ALL CLEAR")
                             event_id         = db.log_alert_end()
                             current_event_id = event_id
