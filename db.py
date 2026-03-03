@@ -2,7 +2,7 @@
 Database layer using PostgreSQL via pg8000.
 Pure Python driver — no system libraries needed.
 """
-import os, time, uuid
+import os, time, uuid, ssl
 import pg8000.native
 from urllib.parse import urlparse
 
@@ -10,13 +10,16 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 def _conn():
     url = urlparse(DATABASE_URL)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     return pg8000.native.Connection(
         user=url.username,
         password=url.password,
         host=url.hostname,
         port=url.port or 5432,
         database=url.path.lstrip("/"),
-        ssl_context=True
+        ssl_context=ctx
     )
 
 def _row_to_dict(columns, row):
