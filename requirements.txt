@@ -1,0 +1,40 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE: requirements.txt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+python-telegram-bot==21.5
+aiohttp==3.9.5
+flask==3.0.3
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE: Procfile
+(Note: capital P, no file extension)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+web: python dashboard.py
+worker: python bot.py
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE: README.md  (replace the existing one)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Family Safety Bot
+
+Israeli rocket alert → Telegram family check-in system.
+
+## Environment Variables (set in Railway)
+
+| Variable              | Example                        | Required |
+|-----------------------|--------------------------------|----------|
+| BOT_TOKEN             | 7123456789:AAFxxxxx            | ✅       |
+| ADMIN_TELEGRAM_ID     | 123456789                      | ✅       |
+| DASHBOARD_PASSWORD    | mySecurePassword123            | ✅       |
+| FLASK_SECRET          | any-random-string-here         | ✅       |
+| COOLDOWN_SECONDS      | 180                            | optional |
+| REMINDER_MINUTES      | 5                              | optional |
+| ESCALATE_MINUTES      | 10                             | optional |
+
+## How it works
+1. Family member opens Telegram → finds your bot → taps /start → enters their name
+2. You get a Telegram notification → approve/reject in the dashboard or via Telegram
+3. After a rocket alert, all approved members get a check-in message
+4. Responses appear live in the dashboard
