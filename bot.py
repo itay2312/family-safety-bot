@@ -223,14 +223,42 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         member = db.get_member(uid)
         name   = member["name"] if member else "Unknown"
         db.save_response(event_id, uid, action)
+        members = db.get_approved_members()
+
         if action == "ok":
             await query.edit_message_text(f"✅ Got it, {name}. Glad you're safe!")
-            await ctx.bot.send_message(chat_id=ADMIN_ID, text=f"✅ {name} is safe.")
+            # Notify everyone except the person who just responded
+            for m in members:
+                if m["telegram_id"] == uid:
+                    continue
+                try:
+                    await ctx.bot.send_message(
+                        chat_id=m["telegram_id"],
+                        text=f"✅ *{name}* is safe.",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
         else:
             await query.edit_message_text(f"❗ Help is on the way, {name}. Stay where you are!")
+            # Notify EVERYONE immediately (including admin)
+            for m in members:
+                if m["telegram_id"] == uid:
+                    continue
+                try:
+                    await ctx.bot.send_message(
+                        chat_id=m["telegram_id"],
+                        text=f"🚨 *URGENT: {name} needs help!*\n\nCheck on them immediately.",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+            # Always notify admin separately with more detail
             await ctx.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"🚨 URGENT: {name} needs help! Call them immediately."
+                text=f"🚨 *URGENT: {name} needs help!*\n\nTelegram ID: `{uid}`\nCall them immediately.",
+                parse_mode="Markdown"
             )
 
 # ─────────────────────────────────────────
