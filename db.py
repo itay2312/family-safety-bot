@@ -21,12 +21,8 @@ def _conn():
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
     return pg8000.native.Connection(
-        user=user,
-        password=password,
-        host=host,
-        port=port,
-        database=dbname,
-        ssl_context=ssl_ctx
+        user=user, password=password, host=host,
+        port=port, database=dbname, ssl_context=ssl_ctx
     )
 
 def init():
@@ -46,8 +42,7 @@ def init():
             started_at BIGINT,
             ended_at BIGINT,
             zones TEXT,
-            is_test BOOLEAN DEFAULT FALSE,
-            response_count INTEGER DEFAULT 0
+            is_test BOOLEAN DEFAULT FALSE
         )
     """)
     con.run("""
@@ -60,6 +55,10 @@ def init():
             UNIQUE(event_id, telegram_id)
         )
     """)
+    try:
+        con.run("ALTER TABLE alert_events ADD COLUMN response_count INTEGER DEFAULT 0")
+    except Exception:
+        pass
     con.close()
 
 def get_member(telegram_id):
@@ -168,7 +167,7 @@ def get_latest_response(telegram_id):
 def get_alert_history(limit=10):
     con = _conn()
     rows = con.run(
-        "SELECT id, started_at, ended_at, zones, is_test, response_count FROM alert_events ORDER BY ended_at DESC LIMIT :lim",
+        "SELECT id, started_at, ended_at, zones, is_test, COALESCE(response_count, 0) FROM alert_events ORDER BY ended_at DESC LIMIT :lim",
         lim=limit
     )
     con.close()
