@@ -1,10 +1,15 @@
-from flask import Flask, render_template_string, request, session, redirect, jsonify
-import os, time, db
+import os, json, time, uuid
+from flask import Flask, render_template_string, request, redirect, session, jsonify
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET", "change-this-secret-123")
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
+app.secret_key = os.environ.get("FLASK_SECRET", "fallback-secret")
+ADMIN_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "admin123")
 
+import db
+
+# ─────────────────────────────────────────
+# HTML TEMPLATE
+# ─────────────────────────────────────────
 HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -13,157 +18,39 @@ HTML = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🚨 Family Safety</title>
 <style>
-:root {
-  --bg:       #08090d;
-  --surface:  #111318;
-  --border:   #1e2028;
-  --border2:  #2a2d3a;
-  --text:     #e8eaf0;
-  --muted:    #5a5f72;
-  --green:    #22c55e;
-  --green-bg: #0d2318;
-  --red:      #ef4444;
-  --red-bg:   #2a0f0f;
-  --yellow:   #f59e0b;
-  --yellow-bg:#2a1f08;
-  --blue:     #3b82f6;
-  --purple:   #a78bfa;
-  --radius:   12px;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-       background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; }
-
-/* ── Alert Banner ── */
-#alert-banner {
-  display: none; position: sticky; top: 0; z-index: 200;
-  background: var(--red); color: #fff;
-  padding: 14px 24px; text-align: center;
-  font-weight: 700; font-size: 1rem; letter-spacing: .04em;
-  animation: bgpulse 1.2s infinite;
-  box-shadow: 0 4px 40px rgba(239,68,68,.4);
-}
-#alert-banner.show { display: block; }
-#alert-zones { font-weight: 400; font-size: .85rem; margin-top: 3px; opacity: .9; }
-@keyframes bgpulse { 0%,100%{background:#ef4444} 50%{background:#b91c1c} }
-
-/* ── Header ── */
-.header {
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 0 32px; height: 60px;
-  display: flex; align-items: center; gap: 14px;
-  position: sticky; top: 0; z-index: 100;
-}
-.header-logo { font-size: 1.3rem; }
-.header-title { font-size: 1rem; font-weight: 700; color: var(--text); }
-.header-subtitle { font-size: .75rem; color: var(--muted); margin-top: 1px; }
-.spacer { flex: 1; }
-.live-indicator { display: flex; align-items: center; gap: 6px;
-                  font-size: .75rem; color: var(--muted); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
-       animation: blink 2s infinite; }
-.dot.red { background: var(--red); }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
-.badge { padding: 4px 12px; border-radius: 20px; font-size: .72rem;
-         font-weight: 700; letter-spacing: .04em; }
-.badge-green { background: var(--green-bg); color: var(--green); border: 1px solid #16a34a44; }
-.badge-red   { background: var(--red-bg);   color: var(--red);   border: 1px solid #ef444444;
-               animation: bgpulse 1.2s infinite; }
-.btn { padding: 7px 16px; border-radius: 8px; font-size: .8rem; font-weight: 600;
-       cursor: pointer; border: none; transition: opacity .15s; text-decoration: none;
-       display: inline-block; }
-.btn:hover { opacity: .8; }
-.btn-red    { background: #dc2626; color: #fff; }
-.btn-orange { background: #ea580c; color: #fff; }
-.btn-green  { background: #16a34a; color: #fff; }
-.btn-ghost  { background: var(--border2); color: var(--text); }
-
-/* ── Layout ── */
-.page { max-width: 1100px; margin: 0 auto; padding: 28px 24px; }
-.section-label { font-size: .7rem; font-weight: 700; color: var(--muted);
-                 text-transform: uppercase; letter-spacing: .1em; margin-bottom: 12px; }
-
-/* ── Stat Cards ── */
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
-.stat-card { background: var(--surface); border: 1px solid var(--border);
-             border-radius: var(--radius); padding: 18px 20px; }
-.stat-card .label { font-size: .72rem; color: var(--muted); text-transform: uppercase;
-                    letter-spacing: .07em; margin-bottom: 10px; }
-.stat-card .value { font-size: 2rem; font-weight: 800; line-height: 1; }
-.stat-card .sub   { font-size: .75rem; color: var(--muted); margin-top: 4px; }
-.stat-card.alert-active { border-color: var(--red); background: var(--red-bg); }
-
-/* ── Two column layout ── */
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
-.full-col { margin-bottom: 24px; }
-
-/* ── Cards ── */
-.card { background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius); overflow: hidden; }
-.card-header { padding: 16px 20px; border-bottom: 1px solid var(--border);
-               display: flex; align-items: center; justify-content: space-between; }
-.card-title { font-size: .85rem; font-weight: 700; }
-.card-body { padding: 0; }
-
-/* ── Tables ── */
-table { width: 100%; border-collapse: collapse; }
-th { padding: 10px 16px; text-align: left; font-size: .7rem; color: var(--muted);
-     text-transform: uppercase; letter-spacing: .07em;
-     border-bottom: 1px solid var(--border); background: var(--surface); }
-td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: .85rem;
-     vertical-align: middle; }
-tr:last-child td { border-bottom: none; }
-tbody tr:hover td { background: #ffffff05; }
-
-/* ── Pills ── */
-.pill { display: inline-block; padding: 3px 10px; border-radius: 20px;
-        font-size: .72rem; font-weight: 600; }
-.pill-green  { background: var(--green-bg); color: var(--green); }
-.pill-yellow { background: var(--yellow-bg); color: var(--yellow); }
-.pill-red    { background: var(--red-bg); color: var(--red); }
-.pill-purple { background: #2d1f4a; color: var(--purple); }
-.pill-blue   { background: #0f1f3a; color: var(--blue); }
-
-/* ── Action buttons in table ── */
-.action-group { display: flex; gap: 6px; flex-wrap: wrap; }
-form { display: inline; }
-
-/* ── Alert log entries ── */
-.log-entry { padding: 14px 20px; border-bottom: 1px solid var(--border);
-             display: grid; grid-template-columns: 140px 80px 1fr auto;
-             gap: 16px; align-items: center; font-size: .83rem; }
-.log-entry:last-child { border-bottom: none; }
-.log-entry:hover { background: #ffffff04; }
-.log-time { color: var(--muted); font-size: .78rem; }
-.log-zones { color: var(--purple); font-size: .8rem; }
-.log-responses { display: flex; gap: 8px; align-items: center; }
-.resp-chip { display: flex; align-items: center; gap: 4px; padding: 3px 8px;
-             border-radius: 6px; font-size: .75rem; font-weight: 600; }
-.resp-ok   { background: var(--green-bg); color: var(--green); }
-.resp-help { background: var(--red-bg);   color: var(--red); }
-.resp-wait { background: var(--border2);  color: var(--muted); }
-.response-rate { font-size: .75rem; color: var(--muted); text-align: right; }
-
-/* ── Empty state ── */
-.empty { padding: 40px; text-align: center; color: var(--muted); font-size: .85rem; }
-.empty-icon { font-size: 2rem; margin-bottom: 8px; }
-
-/* ── Login ── */
-.login-wrap { display: flex; align-items: center; justify-content: center;
-              min-height: 100vh; }
-.login-box  { background: var(--surface); border: 1px solid var(--border);
-              border-radius: 16px; padding: 40px; width: 360px; }
-.login-box h1 { font-size: 1.6rem; margin-bottom: 6px; }
-.login-box p  { color: var(--muted); font-size: .85rem; margin-bottom: 28px; }
-input[type=password] { width: 100%; padding: 12px 16px; background: var(--bg);
-  border: 1px solid var(--border2); border-radius: 8px; color: var(--text);
-  font-size: .95rem; margin-bottom: 12px; outline: none; }
-input[type=password]:focus { border-color: var(--blue); }
-.login-error { color: var(--red); font-size: .82rem; margin-bottom: 10px; }
-
-/* ── Topbar ── */
-.topbar { display: flex; align-items: center; justify-content: space-between;
-          margin-bottom: 14px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
+  .topbar { background: #1a1a1a; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2a2a; }
+  .topbar h1 { font-size: 1.2rem; font-weight: 600; }
+  .topbar a { color: #888; text-decoration: none; font-size: 0.85rem; }
+  .alert-banner { background: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5; padding: 16px 24px; text-align: center; font-weight: 600; font-size: 1rem; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; text-align: center; }
+  .card .val { font-size: 2rem; font-weight: 700; color: #fff; }
+  .card .lbl { font-size: 0.8rem; color: #888; margin-top: 4px; }
+  .section { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; margin-bottom: 24px; }
+  .section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: #ccc; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th { text-align: left; color: #666; font-weight: 500; padding: 8px 12px; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 10px 12px; border-bottom: 1px solid #1e1e1e; }
+  tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+  .badge-green { background: #14532d; color: #86efac; }
+  .badge-yellow { background: #713f12; color: #fde68a; }
+  .badge-red { background: #7f1d1d; color: #fca5a5; }
+  .badge-blue { background: #1e3a5f; color: #93c5fd; }
+  .btn { padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+  .btn-green { background: #166534; color: #86efac; }
+  .btn-red { background: #7f1d1d; color: #fca5a5; }
+  .btn-gray { background: #2a2a2a; color: #aaa; }
+  .btn-orange { background: #92400e; color: #fcd34d; font-size: 0.95rem; padding: 10px 24px; width: 100%; margin-top: 8px; }
+  .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-box { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 40px; width: 320px; text-align: center; }
+  .login-box h2 { margin-bottom: 24px; font-size: 1.3rem; }
+  .login-box input { width: 100%; padding: 10px 14px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 0.9rem; margin-bottom: 14px; }
+  .login-box button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 0.95rem; cursor: pointer; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -171,390 +58,153 @@ input[type=password]:focus { border-color: var(--blue); }
 {% if not logged_in %}
 <div class="login-wrap">
   <div class="login-box">
-    <h1>🚨 Family Safety</h1>
-    <p>Admin dashboard — sign in to continue</p>
-    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <h2>🚨 Family Safety</h2>
+    <p style="color:#888;margin-bottom:20px;font-size:0.85rem">Admin dashboard — sign in to continue</p>
     <form method="POST" action="/login">
       <input type="password" name="password" placeholder="Password" autofocus>
-      <button class="btn btn-green" style="width:100%;padding:12px;font-size:.95rem" type="submit">
-        Sign in
-      </button>
+      <button type="submit">Sign in</button>
     </form>
+    {% if error %}<p style="color:#f87171;margin-top:12px;font-size:0.85rem">{{ error }}</p>{% endif %}
   </div>
 </div>
 
 {% else %}
 
-<!-- Alert banner -->
-<div id="alert-banner">
-  🚨 ROCKET ALERT ACTIVE IN YOUR AREA 🚨
-  <div id="alert-zones"></div>
+{% if alert_active %}
+<div class="alert-banner">🚨 ALERT ACTIVE — {{ alert_zones }}</div>
+{% endif %}
+
+<div class="topbar">
+  <h1>🚨 Family Safety Dashboard</h1>
+  <a href="/logout">Sign out</a>
 </div>
 
-<!-- Header -->
-<div class="header">
-  <div class="header-logo">🚨</div>
-  <div>
-    <div class="header-title">Family Safety</div>
-    <div class="header-subtitle">Admin Dashboard</div>
+<div class="container">
+  <div class="cards">
+    <div class="card">
+      <div class="val" style="color:{% if alert_active %}#ef4444{% else %}#22c55e{% endif %}">
+        {% if alert_active %}🚨 ALERT{% else %}✅ IDLE{% endif %}
+      </div>
+      <div class="lbl">Alert State</div>
+    </div>
+    <div class="card"><div class="val">{{ approved }}</div><div class="lbl">Approved Members</div></div>
+    <div class="card"><div class="val">{{ observers }}</div><div class="lbl">Observers</div></div>
+    <div class="card"><div class="val">{{ pending }}</div><div class="lbl">Pending Approval</div></div>
   </div>
-  <div class="spacer"></div>
-  <div class="live-indicator">
-    <div class="dot" id="live-dot"></div>
-    <span id="last-updated">Connecting...</span>
+
+  <!-- Members -->
+  <div class="section">
+    <h2>👥 Members</h2>
+    {% if members %}
+    <table>
+      <tr><th>Name</th><th>Zone</th><th>Status</th><th>Actions</th></tr>
+      {% for m in members %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.zone or '—' }}</td>
+        <td>
+          {% if m.status == 'approved' %}<span class="badge badge-green">Approved</span>
+          {% elif m.status == 'pending' %}<span class="badge badge-yellow">Pending</span>
+          {% else %}<span class="badge badge-red">Rejected</span>{% endif %}
+        </td>
+        <td>
+          {% if m.status == 'pending' %}
+          <form method="POST" action="/approve/{{ m.telegram_id }}" style="display:inline">
+            <button class="btn btn-green">✅ Approve</button>
+          </form>
+          <form method="POST" action="/reject/{{ m.telegram_id }}" style="display:inline;margin-left:6px">
+            <button class="btn btn-red">❌ Reject</button>
+          </form>
+          {% endif %}
+          <form method="POST" action="/remove/{{ m.telegram_id }}" style="display:inline;margin-left:6px"
+                onsubmit="return confirm('Remove {{ m.name }}?')">
+            <button class="btn btn-gray">🗑 Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p style="color:#666;font-size:0.875rem">No members yet.</p>
+    {% endif %}
   </div>
-  <span id="status-badge" class="badge badge-green">✅ All Clear</span>
-  <a href="/logout" class="btn btn-ghost" style="margin-left:8px">Sign out</a>
+
+  <!-- Last Check-in Status -->
+  {% if last_checkins %}
+  <div class="section">
+    <h2>📋 Last Check-in Status</h2>
+    <table>
+      <tr><th>Name</th><th>Zone</th><th>Response</th></tr>
+      {% for m in last_checkins %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.zone or '—' }}</td>
+        <td>
+          {% if m.response == 'ok' %}<span class="badge badge-green">✅ Safe</span>
+          {% elif m.response == 'help' %}<span class="badge badge-red">🆘 Help</span>
+          {% else %}<span class="badge badge-yellow">⏳ No response</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- Alert History -->
+  {% if history %}
+  <div class="section">
+    <h2>📜 Alert History</h2>
+    <table>
+      <tr><th>Time</th><th>Zones</th><th>Type</th><th>Responses</th></tr>
+      {% for h in history %}
+      <tr>
+        <td>{{ h.time }}</td>
+        <td>{{ h.zones }}</td>
+        <td>{% if h.is_test %}<span class="badge badge-blue">Test</span>{% else %}<span class="badge badge-red">Real</span>{% endif %}</td>
+        <td>{{ h.responded }}/{{ h.total }} ({{ h.rate }}%)</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- Test Button -->
+  <div class="section">
+    <h2>🧪 Test Alert</h2>
+    <p style="color:#888;font-size:0.85rem;margin-bottom:12px">Sends a test check-in to all approved members and a test notification to observers.</p>
+    <form method="POST" action="/test">
+      <button class="btn btn-orange">🚨 Send Test Alert</button>
+    </form>
+  </div>
 </div>
 
-<div class="page">
-
-  <!-- Stat cards -->
-  <div class="stats">
-    <div class="stat-card" id="state-card">
-      <div class="label">Alert State</div>
-      <div class="value" id="state-value" style="color:var(--green)">—</div>
-      <div class="sub" id="state-sub">Loading...</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Approved Members</div>
-      <div class="value" style="color:var(--blue)">{{ approved_count }}</div>
-      <div class="sub">in family group</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Observers</div>
-      <div class="value" style="color:var(--purple)">{{ observer_count }}</div>
-      <div class="sub">abroad / watching</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Pending Approval</div>
-      <div class="value" style="color:var(--yellow)">{{ pending_count }}</div>
-      <div class="sub">awaiting review</div>
-    </div>
-  </div>
-
-  <!-- Members + Recent event side by side -->
-  <div class="two-col">
-
-    <!-- Members -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">👥 Members</div>
-        <form method="POST" action="/test">
-          <button class="btn btn-orange" type="submit"
-            onclick="return confirm('Send test check-in to all approved members?')">
-            🧪 Test Alert
-          </button>
-        </form>
-      </div>
-      <div class="card-body">
-        {% if members %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Zone</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for m in members %}
-            <tr>
-              <td><strong>{{ m.name }}</strong></td>
-              <td>
-                {% if m.zone == '🌍 Abroad' %}
-                  <span class="pill pill-purple">🌍 Observer</span>
-                {% elif m.zone %}
-                  <span style="color:var(--purple);font-size:.8rem">📍 {{ m.zone }}</span>
-                {% else %}
-                  <span style="color:var(--muted)">—</span>
-                {% endif %}
-              </td>
-              <td>
-                {% if m.status == 'approved' %}
-                  <span class="pill pill-green">Approved</span>
-                {% elif m.status == 'pending' %}
-                  <span class="pill pill-yellow">Pending</span>
-                {% else %}
-                  <span class="pill pill-red">Rejected</span>
-                {% endif %}
-              </td>
-              <td>
-                <div class="action-group">
-                  {% if m.status == 'pending' %}
-                  <form method="POST" action="/approve/{{ m.telegram_id }}">
-                    <button class="btn btn-green" type="submit">✅</button>
-                  </form>
-                  <form method="POST" action="/reject/{{ m.telegram_id }}">
-                    <button class="btn btn-red" type="submit">❌</button>
-                  </form>
-                  {% elif m.status == 'approved' %}
-                  <form method="POST" action="/reject/{{ m.telegram_id }}">
-                    <button class="btn btn-red" type="submit">Remove</button>
-                  </form>
-                  {% elif m.status == 'rejected' %}
-                  <form method="POST" action="/approve/{{ m.telegram_id }}">
-                    <button class="btn btn-green" type="submit">Re-approve</button>
-                  </form>
-                  {% endif %}
-                </div>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="empty">
-          <div class="empty-icon">👥</div>
-          No members yet. Share your bot link!
-        </div>
-        {% endif %}
-      </div>
-    </div>
-
-    <!-- Last event status board -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📋 Last Check-in Status</div>
-        {% if last_event %}
-        <span style="font-size:.75rem;color:var(--muted)">{{ last_event.time_fmt }}</span>
-        {% endif %}
-      </div>
-      <div class="card-body">
-        {% if last_event and last_event.responses %}
-        <table>
-          <thead>
-            <tr><th>Name</th><th>Zone</th><th>Response</th></tr>
-          </thead>
-          <tbody>
-            {% for r in last_event.responses %}
-            <tr>
-              <td><strong>{{ r.name }}</strong></td>
-              <td style="color:var(--purple);font-size:.8rem">{{ r.zone or '—' }}</td>
-              <td>
-                {% if r.response == 'ok' %}
-                  <span class="pill pill-green">✅ Safe</span>
-                {% elif r.response == 'help' %}
-                  <span class="pill pill-red">🆘 Help</span>
-                {% else %}
-                  <span class="pill" style="background:var(--border2);color:var(--muted)">⏳ Waiting</span>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="empty">
-          <div class="empty-icon">📋</div>
-          No check-ins yet. Run a test!
-        </div>
-        {% endif %}
-      </div>
-    </div>
-
-  </div>
-
-  <!-- Alert History Log -->
-  <div class="full-col">
-    <div class="topbar">
-      <div class="section-label">📜 Alert History</div>
-    </div>
-    <div class="card">
-      <div class="card-body">
-        {% if events %}
-        {% for e in events %}
-        <div class="log-entry">
-          <div>
-            <div style="font-weight:600">{{ e.time_fmt }}</div>
-            <div class="log-time">{{ e.date_fmt }}</div>
-          </div>
-          <div>
-            {% if e.is_test %}
-              <span class="pill pill-yellow">🧪 Test</span>
-            {% else %}
-              <span class="pill pill-red">🚨 Real</span>
-            {% endif %}
-          </div>
-          <div>
-            <div class="log-zones">📍 {{ e.zones or 'Unknown zones' }}</div>
-            <div class="log-responses" style="margin-top:6px">
-              <span class="resp-chip resp-ok">✅ {{ e.ok_count }} safe</span>
-              {% if e.help_count > 0 %}
-              <span class="resp-chip resp-help">🆘 {{ e.help_count }} help</span>
-              {% endif %}
-              {% if e.waiting_count > 0 %}
-              <span class="resp-chip resp-wait">⏳ {{ e.waiting_count }} waiting</span>
-              {% endif %}
-            </div>
-          </div>
-          <div class="response-rate">
-            {% if e.total > 0 %}
-            <div style="font-size:1.1rem;font-weight:800;color:{% if e.rate == 100 %}var(--green){% elif e.rate >= 50 %}var(--yellow){% else %}var(--red){% endif %}">
-              {{ e.rate }}%
-            </div>
-            <div style="color:var(--muted);font-size:.72rem">responded</div>
-            {% endif %}
-          </div>
-        </div>
-        {% endfor %}
-        {% else %}
-        <div class="empty">
-          <div class="empty-icon">📜</div>
-          No alert events yet. Use the Test button above!
-        </div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-</div>
-
-<!-- Live polling JS -->
 <script>
-async function poll() {
-  try {
-    const res  = await fetch('/api/state');
-    const data = await res.json();
-    const isAlert = data.state === 'ALERT';
-
-    document.getElementById('alert-banner').className = isAlert ? 'show' : '';
-    document.getElementById('alert-zones').textContent = data.zones ? '📍 ' + data.zones : '';
-
-    const badge = document.getElementById('status-badge');
-    badge.textContent  = isAlert ? '🚨 ALERT' : '✅ All Clear';
-    badge.className    = 'badge ' + (isAlert ? 'badge-red' : 'badge-green');
-
-    const card = document.getElementById('state-card');
-    card.className = 'stat-card' + (isAlert ? ' alert-active' : '');
-
-    const val = document.getElementById('state-value');
-    val.textContent = isAlert ? '🚨 ACTIVE' : '✅ Clear';
-    val.style.color = isAlert ? 'var(--red)' : 'var(--green)';
-
-    document.getElementById('state-sub').textContent = isAlert
-      ? (data.zones || 'Alert in progress')
-      : 'No active alerts';
-
-    document.title = isAlert ? '🚨 ALERT — Family Safety' : '🚨 Family Safety';
-
-    const dot = document.getElementById('live-dot');
-    dot.className = 'dot' + (isAlert ? ' red' : '');
-
-    const now = new Date();
-    document.getElementById('last-updated').textContent =
-      'Updated ' + now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-
-  } catch(e) {
-    document.getElementById('live-dot').className = 'dot red';
-    document.getElementById('last-updated').textContent = 'Connection error';
-  }
-}
-
-poll();
-setInterval(poll, 3000);
+setInterval(() => {
+  fetch('/api/state').then(r => r.json()).then(d => {
+    document.title = d.alert_active ? '🚨 ALERT — Family Safety' : '✅ Family Safety';
+  });
+}, 3000);
 </script>
-
 {% endif %}
 </body>
 </html>
 """
 
-# ── Helpers ──────────────────────────────
-
-def fmt_time(ts):
-    if not ts: return "—"
-    import datetime
-    dt = datetime.datetime.fromtimestamp(ts)
-    return dt.strftime("%H:%M:%S"), dt.strftime("%d %b %Y")
-
-def read_state():
-    try:
-        if os.path.exists(".alert_state"):
-            parts = open(".alert_state").read().strip().split("|")
-            return parts[0], parts[1] if len(parts) > 1 else ""
-    except Exception:
-        pass
-    return "IDLE", ""
-
-# ── Routes ───────────────────────────────
-
+# ─────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────
 @app.route("/")
 def index():
-    if not session.get("admin"):
+    if not session.get("logged_in"):
         return render_template_string(HTML, logged_in=False, error=None)
-
-    members_raw = db.get_all_members()
-    members = []
-    for m in members_raw:
-        members.append(m)
-
-    # Build events with full response detail
-    events_raw = db.get_recent_events(30)
-    events = []
-    approved = db.get_approved_members()
-    non_observer_approved = [m for m in approved if m.get("zone") != "🌍 Abroad"]
-
-    for e in events_raw:
-        resps    = db.get_responses_for_event(e["id"])
-        resp_map = {r["telegram_id"]: r["response"] for r in resps}
-        ok_count   = sum(1 for r in resps if r["response"] == "ok")
-        help_count = sum(1 for r in resps if r["response"] == "help")
-        total      = len(non_observer_approved)
-        responded  = ok_count + help_count
-        waiting    = max(0, total - responded)
-        rate       = int(responded / total * 100) if total > 0 else 0
-        t_fmt, d_fmt = fmt_time(e.get("ended_at") or e.get("started_at"))
-        events.append({
-            **e,
-            "time_fmt":     t_fmt,
-            "date_fmt":     d_fmt,
-            "ok_count":     ok_count,
-            "help_count":   help_count,
-            "waiting_count":waiting,
-            "total":        total,
-            "rate":         rate,
-        })
-
-    # Last event for status board
-    last_event = None
-    if events:
-        e = events[0]
-        resps = db.get_responses_for_event(e["id"])
-        resp_map = {r["telegram_id"]: r["response"] for r in resps}
-        board = []
-        for m in non_observer_approved:
-            board.append({
-                "name":     m["name"],
-                "zone":     m.get("zone") or "",
-                "response": resp_map.get(m["telegram_id"])
-            })
-        last_event = {**e, "responses": board}
-
-    return render_template_string(HTML,
-        logged_in=True,
-        members=members,
-        events=events,
-        last_event=last_event,
-        approved_count=sum(1 for m in members_raw if m["status"] == "approved" and m.get("zone") != "🌍 Abroad"),
-        observer_count=sum(1 for m in members_raw if m["status"] == "approved" and m.get("zone") == "🌍 Abroad"),
-        pending_count=sum(1 for m in members_raw if m["status"] == "pending"),
-    )
-
-@app.route("/api/state")
-def api_state():
-    if not session.get("admin"):
-        return jsonify({"error": "unauthorized"}), 401
-    state, zones = read_state()
-    return jsonify({"state": state, "zones": zones})
+    return render_dashboard()
 
 @app.route("/login", methods=["POST"])
 def login():
-    if request.form.get("password") == DASHBOARD_PASSWORD:
-        session["admin"] = True
+    if request.form.get("password") == ADMIN_PASSWORD:
+        session["logged_in"] = True
         return redirect("/")
-    return render_template_string(HTML, logged_in=False, error="Wrong password. Try again.")
+    return render_template_string(HTML, logged_in=False, error="Wrong password")
 
 @app.route("/logout")
 def logout():
@@ -563,27 +213,113 @@ def logout():
 
 @app.route("/approve/<int:uid>", methods=["POST"])
 def approve(uid):
-    if not session.get("admin"): return redirect("/")
+    if not session.get("logged_in"): return redirect("/")
     db.set_status(uid, "approved")
     return redirect("/")
 
 @app.route("/reject/<int:uid>", methods=["POST"])
 def reject(uid):
-    if not session.get("admin"): return redirect("/")
+    if not session.get("logged_in"): return redirect("/")
     db.set_status(uid, "rejected")
     return redirect("/")
 
+@app.route("/remove/<int:uid>", methods=["POST"])
+def remove(uid):
+    if not session.get("logged_in"): return redirect("/")
+    db.remove_member(uid)
+    return redirect("/")
+
+@app.route("/webhook/alert", methods=["POST"])
+def webhook_alert():
+    try:
+        data = request.get_json(force=True)
+        cities = data.get("cities", [])
+        alert_id = data.get("id", "")
+        if cities and alert_id:
+            with open(".webhook_alert", "w") as f:
+                json.dump({"id": alert_id, "cities": cities}, f)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/test", methods=["POST"])
 def test_alert():
-    if not session.get("admin"): return redirect("/")
+    if not session.get("logged_in"): return redirect("/")
     open(".trigger_test", "w").write("1")
     return redirect("/")
 
-@app.route("/health")
-def health():
-    from flask import jsonify
-    return jsonify({"status": "ok"})
+@app.route("/api/state")
+def api_state():
+    try:
+        state_raw = open(".alert_state").read()
+        parts = state_raw.split("|")
+        alert_active = parts[0] == "ALERT"
+        zones = parts[1] if len(parts) > 1 else ""
+    except:
+        alert_active = False
+        zones = ""
+    return jsonify({"alert_active": alert_active, "zones": zones})
+
+# ─────────────────────────────────────────
+# DASHBOARD BUILDER
+# ─────────────────────────────────────────
+def render_dashboard():
+    members = db.get_all_members()
+    approved_members = [m for m in members if m["status"] == "approved" and (m.get("zone") or "") != "🌍 Abroad"]
+    observers = [m for m in members if m["status"] == "approved" and (m.get("zone") or "") == "🌍 Abroad"]
+    pending = [m for m in members if m["status"] == "pending"]
+
+    try:
+        state_raw = open(".alert_state").read()
+        parts = state_raw.split("|")
+        alert_active = parts[0] == "ALERT"
+        alert_zones = parts[1] if len(parts) > 1 else ""
+    except:
+        alert_active = False
+        alert_zones = ""
+
+    history_raw = db.get_alert_history(limit=10)
+    history = []
+    for h in history_raw:
+        total = len(approved_members)
+        responded = h.get("response_count", 0)
+        rate = round((responded / total * 100) if total > 0 else 0)
+        ts = h.get("ended_at") or h.get("started_at") or 0
+        history.append({
+            "time": time.strftime("%b %d %H:%M", time.localtime(ts)),
+            "zones": h.get("zones") or "—",
+            "is_test": h.get("is_test", False),
+            "responded": responded,
+            "total": total,
+            "rate": rate,
+        })
+
+    last_checkins = []
+    if history_raw:
+        last_event_id = history_raw[0].get("id")
+        if last_event_id:
+            responses = {r["telegram_id"]: r["response"] for r in db.get_responses_for_event(last_event_id)}
+            for m in approved_members:
+                last_checkins.append({
+                    "name": m["name"],
+                    "zone": m.get("zone") or "—",
+                    "response": responses.get(m["telegram_id"]),
+                })
+
+    return render_template_string(
+        HTML,
+        logged_in=True,
+        alert_active=alert_active,
+        alert_zones=alert_zones,
+        approved=len(approved_members),
+        observers=len(observers),
+        pending=len(pending),
+        members=members,
+        history=history,
+        last_checkins=last_checkins,
+        error=None,
+    )
 
 if __name__ == "__main__":
     db.init()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
