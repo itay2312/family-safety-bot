@@ -537,7 +537,7 @@ async def main():
     await app.initialize()
     await app.start()
     logger.info("🤖 Bot running with Observer mode...")
-    await asyncio.gather(poll_alerts(app), app.updater.start_polling())
+    await asyncio.gather(poll_alerts(app), app.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES))
 
 if __name__ == "__main__":
     asyncio.run(main())
