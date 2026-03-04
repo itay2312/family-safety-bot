@@ -17,7 +17,6 @@ ESCALATE_MINS = int(os.environ.get("ESCALATE_MINUTES", 10))
 
 # ─────────────────────────────────────────
 # ZONE DEFINITIONS
-# "Abroad" = observer mode, no local alerts
 # ─────────────────────────────────────────
 ZONES = {
     "Tel Aviv":       ["תל אביב"],
@@ -29,7 +28,7 @@ ZONES = {
     "Bat Yam":        ["בת ים"],
     "Rishon LeZion":  ["ראשון לציון"],
     "Whole Center":   ["גוש דן", "מרכז", "אזור"],
-    "🌍 Abroad":      [],   # observer — no local alerts, full updates
+    "🌍 Abroad":      [],
 }
 
 OREF_URL = "https://www.oref.org.il/WarningMessages/alert/alerts.json"
@@ -66,13 +65,12 @@ def get_hit_zones(alert_cities: list) -> list:
 
 def member_is_affected(member_zone: str, hit_zones: list) -> bool:
     if not member_zone or member_zone == "🌍 Abroad":
-        return False  # observers never get check-ins
+        return False
     if member_zone == "Whole Center":
         return True
     return member_zone in hit_zones
 
 def who_is_affected_text(hit_zones: list) -> str:
-    """Build a human-readable summary of which members are in affected zones."""
     members = db.get_approved_members()
     affected_names = []
     for m in members:
@@ -98,53 +96,34 @@ def zone_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 async def notify_observers(bot: Bot, message: str):
-    """Send a message to all approved observers."""
     members = db.get_approved_members()
     for m in members:
         if not is_observer(m):
             continue
         try:
-            await bot.send_message(
-                chat_id=m["telegram_id"],
-                text=message,
-                parse_mode="Markdown"
-            )
+            await bot.send_message(chat_id=m["telegram_id"], text=message, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Failed to notify observer {m['name']}: {e}")
 
 async def notify_all_approved(bot: Bot, message: str, exclude_id: int = None):
-    """Send a message to all approved members including observers, optionally excluding one."""
     members = db.get_approved_members()
     for m in members:
         if exclude_id and m["telegram_id"] == exclude_id:
             continue
         try:
-            await bot.send_message(
-                chat_id=m["telegram_id"],
-                text=message,
-                parse_mode="Markdown"
-            )
+            await bot.send_message(chat_id=m["telegram_id"], text=message, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Failed to notify {m['name']}: {e}")
 
 async def broadcast_status_board(bot: Bot, event_id: str):
-    """
-    Send a live status board to everyone (members + observers).
-    Called after every response and after 15 min timeout.
-    """
-    members  = db.get_approved_members()
-    # Only show non-observer members on the board
+    members   = db.get_approved_members()
     checkable = [m for m in members if not is_observer(m)]
     if not checkable:
         return
-
-    responses = {r["telegram_id"]: r["response"]
-                 for r in db.get_responses_for_event(event_id)}
-
+    responses = {r["telegram_id"]: r["response"] for r in db.get_responses_for_event(event_id)}
     lines = ["📋 *Family Status Update*\n"]
-    all_safe    = True
+    all_safe     = True
     someone_help = False
-
     for m in checkable:
         r = responses.get(m["telegram_id"])
         if r == "ok":
@@ -157,25 +136,16 @@ async def broadcast_status_board(bot: Bot, event_id: str):
             emoji = "⏳"
             all_safe = False
         lines.append(f"{emoji} {m['name']}")
-
-    # Footer line
     if someone_help:
         lines.append("\n🚨 *Someone needs help — act immediately!*")
     elif all_safe:
         lines.append("\n🎉 *Everyone is safe!*")
     else:
         lines.append("\n⏳ _Still waiting for some responses..._")
-
     board_text = "\n".join(lines)
-
-    # Send to everyone — members + observers
     for m in members:
         try:
-            await bot.send_message(
-                chat_id=m["telegram_id"],
-                text=board_text,
-                parse_mode="Markdown"
-            )
+            await bot.send_message(chat_id=m["telegram_id"], text=board_text, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Status board failed for {m['name']}: {e}")
 
@@ -186,7 +156,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     name = update.effective_user.first_name or "Unknown"
     member = db.get_member(uid)
-
     if member:
         status = member["status"]
         if status == "approved":
@@ -197,7 +166,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif status == "rejected":
             await update.message.reply_text("❌ Your request was not approved. Contact the admin.")
         return
-
     db.add_member(uid, name, status="pending")
     ctx.user_data["awaiting_name"] = True
     await update.message.reply_text(
@@ -214,12 +182,10 @@ async def handle_name_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if not ctx.user_data.get("awaiting_name"):
         return
-
     full_name = update.message.text.strip()[:60]
     db.update_name(uid, full_name)
     ctx.user_data["awaiting_name"] = False
     ctx.user_data["awaiting_zone"] = True
-
     await update.message.reply_text(
         f"Nice to meet you, *{full_name}!* 👋\n\n"
         "📍 Where are you based?\n\n"
@@ -238,16 +204,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data  = query.data
     uid   = query.from_user.id
 
-    # ── Zone selection ──
     if data.startswith("zone:"):
         zone_name = data.split(":", 1)[1]
         member = db.get_member(uid)
         if not member or member["status"] != "pending":
             return
-
         db.set_zone(uid, zone_name)
         ctx.user_data["awaiting_zone"] = False
-
         is_abroad = zone_name == "🌍 Abroad"
         if is_abroad:
             confirmation = (
@@ -265,10 +228,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "You'll receive safety check-ins after rocket alerts in your area.\n\n"
                 "Waiting for admin approval... 🙏"
             )
-
         await query.edit_message_text(confirmation, parse_mode="Markdown")
-
-        # Notify admin
         role_label = "🌍 Observer (Abroad)" if is_abroad else f"📍 Member — {zone_name}"
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Approve", callback_data=f"approve:{uid}"),
@@ -276,18 +236,12 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]])
         await ctx.bot.send_message(
             chat_id=ADMIN_ID,
-            text=(
-                f"🆕 *New request*\n\n"
-                f"Name: *{member['name']}*\n"
-                f"Role: {role_label}\n"
-                f"Telegram ID: `{uid}`"
-            ),
+            text=(f"🆕 *New request*\n\nName: *{member['name']}*\nRole: {role_label}\nTelegram ID: `{uid}`"),
             parse_mode="Markdown",
             reply_markup=keyboard
         )
         return
 
-    # ── Admin approve / reject ──
     if data.startswith("approve:") or data.startswith("reject:"):
         if uid != ADMIN_ID:
             return
@@ -297,14 +251,12 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not member:
             await query.edit_message_text("⚠️ Member not found.")
             return
-
         if action == "approve":
             db.set_status(target_uid, "approved")
             zone = member.get("zone") or "not set"
             is_abroad = zone == "🌍 Abroad"
             await query.edit_message_text(
-                f"✅ *{member['name']}* approved.\n"
-                f"Role: {'🌍 Observer' if is_abroad else f'📍 {zone}'}",
+                f"✅ *{member['name']}* approved.\nRole: {'🌍 Observer' if is_abroad else f'📍 {zone}'}",
                 parse_mode="Markdown"
             )
             if is_abroad:
@@ -321,23 +273,15 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 await ctx.bot.send_message(
                     chat_id=target_uid,
-                    text=(
-                        f"🎉 You've been approved!\n\n"
-                        f"📍 Your alert zone: *{zone}*\n\n"
-                        "You'll receive safety check-ins after rocket alerts in your area."
-                    ),
+                    text=(f"🎉 You've been approved!\n\n📍 Your alert zone: *{zone}*\n\nYou'll receive safety check-ins after rocket alerts in your area."),
                     parse_mode="Markdown"
                 )
         else:
             db.set_status(target_uid, "rejected")
             await query.edit_message_text(f"❌ *{member['name']}* rejected.", parse_mode="Markdown")
-            await ctx.bot.send_message(
-                chat_id=target_uid,
-                text="❌ Your request was not approved. Contact the admin."
-            )
+            await ctx.bot.send_message(chat_id=target_uid, text="❌ Your request was not approved. Contact the admin.")
         return
 
-    # ── Check-in responses (OK / Help) ──
     if ":" in data:
         action, event_id = data.split(":", 1)
         if action not in ("ok", "help"):
@@ -349,36 +293,17 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         name   = member["name"] if member else "Unknown"
         zone   = member.get("zone") or "" if member else ""
         db.save_response(event_id, uid, action)
-
         if action == "ok":
             await query.edit_message_text(f"✅ Got it, {name}. Glad you're safe!")
-            # Notify everyone except the responder
-            await notify_all_approved(
-                ctx.bot,
-                f"✅ *{name}* is safe.",
-                exclude_id=uid
-            )
+            await notify_all_approved(ctx.bot, f"✅ *{name}* is safe.", exclude_id=uid)
         else:
             await query.edit_message_text(f"❗ Help is on the way, {name}. Stay where you are!")
-            # Notify EVERYONE immediately
-            await notify_all_approved(
-                ctx.bot,
-                f"🚨 *URGENT: {name} needs help!*\n\nCheck on them immediately.",
-                exclude_id=uid
-            )
-            # Extra detailed alert to admin
+            await notify_all_approved(ctx.bot, f"🚨 *URGENT: {name} needs help!*\n\nCheck on them immediately.", exclude_id=uid)
             await ctx.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=(
-                    f"🚨 *URGENT: {name} needs help!*\n"
-                    f"Zone: {zone}\n"
-                    f"Telegram ID: `{uid}`\n"
-                    "Call them immediately."
-                ),
+                text=(f"🚨 *URGENT: {name} needs help!*\nZone: {zone}\nTelegram ID: `{uid}`\nCall them immediately."),
                 parse_mode="Markdown"
             )
-
-        # Always send updated status board to everyone after any response
         await broadcast_status_board(ctx.bot, event_id)
 
 # ─────────────────────────────────────────
@@ -396,7 +321,6 @@ async def poll_alerts(app: Application):
                 ) as resp:
                     text = await resp.text(encoding="utf-8-sig")
                     text = text.strip()
-
                     hit_zones = []
                     if len(text) > 10:
                         try:
@@ -415,28 +339,15 @@ async def poll_alerts(app: Application):
                             affected    = who_is_affected_text(hit_zones)
                             logger.info(f"🚨 ALERT: {zones_str}")
                             db.log_alert_start()
-
-                            # Write state for dashboard
                             open(".alert_state", "w").write(f"ALERT|{zones_str}")
-
-                            # Notify admin
                             await app.bot.send_message(
                                 chat_id=ADMIN_ID,
-                                text=(
-                                    f"🚨 *Alert in:* {zones_str}\n\n"
-                                    f"👥 Affected family: {affected}\n\n"
-                                    "Waiting for all-clear..."
-                                ),
+                                text=(f"🚨 *Alert in:* {zones_str}\n\n👥 Affected family: {affected}\n\nWaiting for all-clear..."),
                                 parse_mode="Markdown"
                             )
-
-                            # Notify observers with full detail
                             await notify_observers(
                                 app.bot,
-                                f"🚨 *Rocket alert in Israel!*\n\n"
-                                f"📍 Zones: *{zones_str}*\n\n"
-                                f"👥 Family members in affected areas:\n{affected}\n\n"
-                                f"⏳ Check-ins will be sent after the all-clear."
+                                f"🚨 *Rocket alert in Israel!*\n\n📍 Zones: *{zones_str}*\n\n👥 Family members in affected areas:\n{affected}\n\n⏳ Check-ins will be sent after the all-clear."
                             )
 
                     elif alert_state == "ALERT":
@@ -446,15 +357,10 @@ async def poll_alerts(app: Application):
                             open(".alert_state", "w").write("IDLE|")
                             zones_str = ", ".join(active_zones)
                             logger.info("✅ ALL CLEAR")
-
-                            # Notify observers of all-clear
                             await notify_observers(
                                 app.bot,
-                                f"✅ *All clear in {zones_str}*\n\n"
-                                "Check-in messages are being sent to family members now. "
-                                "You'll see their responses as they come in."
+                                f"✅ *All clear in {zones_str}*\n\nCheck-in messages are being sent to family members now. You'll see their responses as they come in."
                             )
-
                             event_id         = db.log_alert_end(zones=zones_str)
                             current_event_id = event_id
                             await send_checkins(app.bot, event_id, active_zones)
@@ -462,19 +368,44 @@ async def poll_alerts(app: Application):
             except Exception as e:
                 logger.warning(f"Poll error: {e}")
 
-            # Test trigger from dashboard
+            # ── Webhook trigger from GCP poller ──
+            if os.path.exists(".webhook_alert"):
+                try:
+                    with open(".webhook_alert") as f:
+                        wdata = json.load(f)
+                    os.remove(".webhook_alert")
+                    cities    = wdata.get("cities", [])
+                    hit_zones = get_hit_zones(cities)
+                    if hit_zones and alert_state == "IDLE":
+                        alert_state     = "ALERT"
+                        last_alert_time = time.time()
+                        active_zones    = hit_zones
+                        zones_str       = ", ".join(hit_zones)
+                        affected        = who_is_affected_text(hit_zones)
+                        db.log_alert_start()
+                        open(".alert_state", "w").write(f"ALERT|{zones_str}")
+                        await app.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=(f"🚨 *Alert in:* {zones_str}\n\n👥 Affected family: {affected}\n\nWaiting for all-clear..."),
+                            parse_mode="Markdown"
+                        )
+                        await notify_observers(
+                            app.bot,
+                            f"🚨 *Rocket alert in Israel!*\n\n📍 Zones: *{zones_str}*\n\n👥 Family members in affected areas:\n{affected}\n\n⏳ Check-ins will be sent after the all-clear."
+                        )
+                except Exception as e:
+                    logger.error(f"Webhook alert error: {e}")
+
+            # ── Test trigger from dashboard ──
             if os.path.exists(".trigger_test"):
                 try:
                     os.remove(".trigger_test")
                     zones_str        = "TEST — Tel Aviv area"
                     event_id         = db.log_alert_end(is_test=True, zones=zones_str)
                     current_event_id = event_id
-
                     await notify_observers(
                         app.bot,
-                        f"🧪 *TEST ALERT*\n\n"
-                        f"📍 Zones: *{zones_str}*\n\n"
-                        "This is a test. Check-ins being sent to family members now."
+                        f"🧪 *TEST ALERT*\n\n📍 Zones: *{zones_str}*\n\nThis is a test. Check-ins being sent to family members now."
                     )
                     await send_checkins(app.bot, event_id, list(ZONES.keys()), is_test=True)
                 except Exception as e:
@@ -483,7 +414,7 @@ async def poll_alerts(app: Application):
             await asyncio.sleep(1)
 
 # ─────────────────────────────────────────
-# SEND CHECK-INS (members only, not observers)
+# SEND CHECK-INS
 # ─────────────────────────────────────────
 async def send_checkins(bot: Bot, event_id: str, hit_zones: list, is_test=False):
     members  = db.get_approved_members()
@@ -494,30 +425,22 @@ async def send_checkins(bot: Bot, event_id: str, hit_zones: list, is_test=False)
     zones_str  = ", ".join(z for z in hit_zones if z != "🌍 Abroad")
     test_label = "🧪 *TEST* — " if is_test else ""
     sent = 0
-
     for m in members:
-        # Skip observers — they watch, not check in
         if is_observer(m):
             continue
         member_zone = m.get("zone") or ""
         if not is_test and not member_is_affected(member_zone, hit_zones):
-            logger.info(f"Skipping {m['name']} — zone {member_zone} not in alert")
             continue
         try:
             await bot.send_message(
                 chat_id=m["telegram_id"],
-                text=(
-                    f"{test_label}🚨 *Rocket alert just ended.*\n"
-                    f"📍 _{zones_str}_\n\n"
-                    f"Are you safe, {m['name']}?"
-                ),
+                text=(f"{test_label}🚨 *Rocket alert just ended.*\n📍 _{zones_str}_\n\nAre you safe, {m['name']}?"),
                 parse_mode="Markdown",
                 reply_markup=keyboard
             )
             sent += 1
         except Exception as e:
             logger.error(f"Failed to reach {m['name']}: {e}")
-
     logger.info(f"Check-ins sent to {sent} members")
     asyncio.create_task(escalation_loop(bot, event_id))
 
@@ -528,34 +451,23 @@ async def escalation_loop(bot: Bot, event_id: str):
     await asyncio.sleep(REMINDER_MINS * 60)
     if event_id != current_event_id:
         return
-
     no_resp = db.get_no_response(event_id)
     no_resp = [m for m in no_resp if not is_observer(m)]
-
     if no_resp:
         names = ", ".join(m["name"] for m in no_resp)
         msg   = f"⚠️ *No response yet from:* {names}"
         await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="Markdown")
         await notify_observers(bot, msg)
-
-        # Send reminder to non-responders
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ I'm OK",    callback_data=f"ok:{event_id}"),
             InlineKeyboardButton("❗ Need Help", callback_data=f"help:{event_id}"),
         ]])
         for m in no_resp:
             try:
-                await bot.send_message(
-                    chat_id=m["telegram_id"],
-                    text="👋 Reminder: Please confirm you're safe!",
-                    reply_markup=keyboard
-                )
+                await bot.send_message(chat_id=m["telegram_id"], text="👋 Reminder: Please confirm you're safe!", reply_markup=keyboard)
             except Exception:
                 pass
-
-    # Send status board to everyone after 15 min regardless
     await broadcast_status_board(bot, event_id)
-
     await asyncio.sleep((ESCALATE_MINS - REMINDER_MINS) * 60)
     still = [m for m in db.get_no_response(event_id) if not is_observer(m)]
     if still:
@@ -593,10 +505,7 @@ async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     zones_str        = "TEST — Tel Aviv area"
     event_id         = db.log_alert_end(is_test=True, zones=zones_str)
     current_event_id = event_id
-    await notify_observers(
-        ctx.bot,
-        f"🧪 *TEST ALERT*\n\n📍 Zones: *{zones_str}*\n\nCheck-ins being sent to family members now."
-    )
+    await notify_observers(ctx.bot, f"🧪 *TEST ALERT*\n\n📍 Zones: *{zones_str}*\n\nCheck-ins being sent to family members now.")
     await send_checkins(ctx.bot, event_id, list(ZONES.keys()), is_test=True)
 
 async def cmd_members(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -625,15 +534,10 @@ async def main():
     app.add_handler(CommandHandler("members", cmd_members))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name_input))
-
     await app.initialize()
     await app.start()
     logger.info("🤖 Bot running with Observer mode...")
-
-    await asyncio.gather(
-        poll_alerts(app),
-        app.updater.start_polling(),
-    )
+    await asyncio.gather(poll_alerts(app), app.updater.start_polling())
 
 if __name__ == "__main__":
     asyncio.run(main())
