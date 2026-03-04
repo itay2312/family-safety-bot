@@ -1,22 +1,7 @@
-import pg8000.native, ssl, os, time, uuid, json
-
-def _conn():
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-    return pg8000.native.Connection(
-        os.environ["DATABASE_URL"].replace("postgresql://", "").split(":")[0],
-        database=os.environ["DATABASE_URL"].split("/")[-1].split("?")[0],
-        user=os.environ["DATABASE_URL"].split("://")[1].split(":")[0],
-        password=os.environ["DATABASE_URL"].split(":")[2].split("@")[0],
-        host=os.environ["DATABASE_URL"].split("@")[1].split("/")[0].split(":")[0],
-        port=int(os.environ["DATABASE_URL"].split("@")[1].split("/")[0].split(":")[1]) if ":" in os.environ["DATABASE_URL"].split("@")[1].split("/")[0] else 5432,
-        ssl_context=ssl_ctx
-    )
+import pg8000.native, ssl, os, time, uuid
 
 def _parse_url():
     url = os.environ["DATABASE_URL"]
-    # postgresql://user:password@host:port/dbname
     url = url.replace("postgresql://", "").replace("postgres://", "")
     user_pass, rest = url.split("@", 1)
     user, password = user_pass.split(":", 1)
@@ -127,7 +112,7 @@ def remove_member(telegram_id):
     con.close()
 
 def log_alert_start():
-    pass  # tracked via log_alert_end
+    pass
 
 def log_alert_end(zones="", is_test=False):
     event_id = str(uuid.uuid4())
