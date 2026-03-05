@@ -9,11 +9,10 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────
-BOT_TOKEN     = os.environ["BOT_TOKEN"]
-ADMIN_ID      = int(os.environ["ADMIN_TELEGRAM_ID"])
-COOLDOWN_SECS = int(os.environ.get("COOLDOWN_SECONDS", 180))
-REMINDER_MINS = int(os.environ.get("REMINDER_MINUTES", 5))
-ESCALATE_MINS = int(os.environ.get("ESCALATE_MINUTES", 10))
+BOT_TOKEN        = os.environ["BOT_TOKEN"]
+ADMIN_ID         = int(os.environ["ADMIN_TELEGRAM_ID"])
+COOLDOWN_SECS    = int(os.environ.get("COOLDOWN_SECONDS", 180))
+NO_RESPONSE_MINS = int(os.environ.get("NO_RESPONSE_MINUTES", 60))
 
 # ─────────────────────────────────────────
 # ZONE DEFINITIONS
@@ -445,36 +444,21 @@ async def send_checkins(bot: Bot, event_id: str, hit_zones: list, is_test=False)
     asyncio.create_task(escalation_loop(bot, event_id))
 
 # ─────────────────────────────────────────
-# ESCALATION
+# ESCALATION — admin only after 1 hour
 # ─────────────────────────────────────────
 async def escalation_loop(bot: Bot, event_id: str):
-    await asyncio.sleep(REMINDER_MINS * 60)
+    await asyncio.sleep(NO_RESPONSE_MINS * 60)
     if event_id != current_event_id:
         return
     no_resp = db.get_no_response(event_id)
     no_resp = [m for m in no_resp if not is_observer(m)]
     if no_resp:
         names = ", ".join(m["name"] for m in no_resp)
-        msg   = f"⚠️ *No response yet from:* {names}"
-        await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="Markdown")
-        await notify_observers(bot, msg)
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ I'm OK",    callback_data=f"ok:{event_id}"),
-            InlineKeyboardButton("❗ Need Help", callback_data=f"help:{event_id}"),
-        ]])
-        for m in no_resp:
-            try:
-                await bot.send_message(chat_id=m["telegram_id"], text="👋 Reminder: Please confirm you're safe!", reply_markup=keyboard)
-            except Exception:
-                pass
-    await broadcast_status_board(bot, event_id)
-    await asyncio.sleep((ESCALATE_MINS - REMINDER_MINS) * 60)
-    still = [m for m in db.get_no_response(event_id) if not is_observer(m)]
-    if still:
-        names = ", ".join(m["name"] for m in still)
-        msg   = f"🚨 *URGENT — Still no response from:* {names}\n\nCall them directly."
-        await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="Markdown")
-        await notify_observers(bot, msg)
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"⚠️ *1 hour since alert — still no response from:* {names}\n\nConsider calling them directly.",
+            parse_mode="Markdown"
+        )
 
 # ─────────────────────────────────────────
 # ADMIN COMMANDS
