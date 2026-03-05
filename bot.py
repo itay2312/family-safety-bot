@@ -16,6 +16,9 @@ NO_RESPONSE_MINS = int(os.environ.get("NO_RESPONSE_MINUTES", 60))
 
 # ─────────────────────────────────────────
 # ZONE DEFINITIONS
+# Each zone has a list of Hebrew keywords that appear in oref city names.
+# "Whole Center" covers all of Gush Dan — if ANY of these appear in the
+# alert, the whole-center zone (and all members) are considered affected.
 # ─────────────────────────────────────────
 ZONES = {
     "Tel Aviv":       ["תל אביב"],
@@ -26,7 +29,20 @@ ZONES = {
     "Holon":          ["חולון"],
     "Bat Yam":        ["בת ים"],
     "Rishon LeZion":  ["ראשון לציון"],
-    "Whole Center":   ["גוש דן", "מרכז", "אזור"],
+    "Whole Center":   [
+        # Broad area keywords oref uses for the whole center
+        "גוש דן", "מרכז", "אזור",
+        # Tel Aviv sub-areas
+        "תל אביב",
+        # Gush Dan cities
+        "רמת גן", "גבעתיים", "בני ברק", "פתח תקווה",
+        "חולון", "בת ים", "ראשון לציון", "אור יהודה",
+        "קריית אונו", "גבעת שמואל", "רמת השרון", "הרצליה",
+        "יהוד", "מונוסון", "סביון", "גני תקווה",
+        "בת-ים", "אזור", "נס ציונה", "לוד", "רמלה",
+        "בית דגן", "יבנה", "רחובות", "מקווה ישראל",
+        "משמר השבעה", "גנות", "חמד", "זיתן",
+    ],
     "🌍 Abroad":      [],
 }
 
@@ -65,6 +81,10 @@ def get_hit_zones(alert_cities: list) -> list:
 def member_is_affected(member_zone: str, hit_zones: list) -> bool:
     if not member_zone or member_zone == "🌍 Abroad":
         return False
+    # If alert covers whole center, everyone in Israel is affected
+    if "Whole Center" in hit_zones:
+        return True
+    # If member is in whole center zone, any alert affects them
     if member_zone == "Whole Center":
         return True
     return member_zone in hit_zones
