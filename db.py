@@ -63,11 +63,47 @@ def init():
             updated_at BIGINT
         )
     """)
+    # Tracks when each member last received a check-in message (for spam prevention)
+    con.run("""
+        CREATE TABLE IF NOT EXISTS checkin_sent (
+            telegram_id BIGINT PRIMARY KEY,
+            sent_at BIGINT
+        )
+    """)
     try:
         con.run("ALTER TABLE alert_events ADD COLUMN response_count INTEGER DEFAULT 0")
     except Exception:
         pass
     con.close()
+
+def record_checkin_sent(telegram_id):
+    """Record the timestamp when a check-in was sent to a member."""
+    con = _conn()
+    con.run(
+        "INSERT INTO checkin_sent (telegram_id, sent_at) VALUES (:uid, :ts) "
+        "ON CONFLICT (telegram_id) DO UPDATE SET sent_at = :ts",
+        uid=telegram_id, ts=int(time.time())
+    )
+    con.close()
+
+def get_last_checkin_sent_time(telegram_id):
+    """Return the epoch timestamp of the last check-in sent, or None."""
+    con = _conn()
+    rows = con.run("SELECT sent_at FROM checkin_sent WHERE telegram_id = :uid", uid=telegram_id)
+    con.close()
+    return rows[0][0] if rows else None
+
+def get_latest_response_with_time(telegram_id):
+    """Return the latest response dict {response, responded_at} or None."""
+    con = _conn()
+    rows = con.run(
+        "SELECT response, responded_at FROM responses WHERE telegram_id = :uid ORDER BY responded_at DESC LIMIT 1",
+        uid=telegram_id
+    )
+    con.close()
+    if rows:
+        return {"response": rows[0][0], "responded_at": rows[0][1]}
+    return None
 
 # ── KV helpers ────────────────────────────────────────────────────────────────
 
