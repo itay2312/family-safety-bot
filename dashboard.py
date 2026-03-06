@@ -258,10 +258,10 @@ def webhook_alert():
         cities = data.get("cities", [])
         alert_id = data.get("id", "")
         if cities and alert_id:
-            with open(".webhook_alert", "w") as f:
-                json.dump({"id": alert_id, "cities": cities}, f)
-        with open(".last_webhook", "w") as f:
-            f.write(str(time.time()))
+            # ✅ Write to DB instead of a file — shared with bot.py
+            db.push_webhook_alert(alert_id, cities)
+        # Still update the ping timestamp in DB
+        db.update_ping_timestamp()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -270,8 +270,7 @@ def webhook_alert():
 @app.route("/webhook/ping", methods=["POST"])
 def webhook_ping():
     try:
-        with open(".last_webhook", "w") as f:
-            f.write(str(time.time()))
+        db.update_ping_timestamp()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -281,17 +280,16 @@ def webhook_ping():
 def test_alert():
     if not session.get("logged_in"):
         return redirect("/")
-    open(".trigger_test", "w").write("1")
+    db.push_test_trigger()
     return redirect("/")
 
 
 @app.route("/api/state")
 def api_state():
     try:
-        state_raw = open(".alert_state").read()
-        parts = state_raw.split("|")
-        alert_active = parts[0] == "ALERT"
-        zones = parts[1] if len(parts) > 1 else ""
+        state = db.get_alert_state()
+        alert_active = state.get("status") == "ALERT"
+        zones = state.get("zones", "")
     except Exception:
         alert_active = False
         zones = ""
@@ -300,7 +298,9 @@ def api_state():
 
 def get_poller_status():
     try:
-        last = float(open(".last_webhook").read().strip())
+        last = db.get_ping_timestamp()
+        if last is None:
+            return "dead", "never connected — poller may be down"
         ago = time.time() - last
         if ago < 120:
             return "ok", "connected " + str(int(ago)) + "s ago"
@@ -319,10 +319,9 @@ def render_dashboard():
     pending = [m for m in members if m["status"] == "pending"]
 
     try:
-        state_raw = open(".alert_state").read()
-        parts = state_raw.split("|")
-        alert_active = parts[0] == "ALERT"
-        alert_zones = parts[1] if len(parts) > 1 else ""
+        state = db.get_alert_state()
+        alert_active = state.get("status") == "ALERT"
+        alert_zones = state.get("zones", "")
     except Exception:
         alert_active = False
         alert_zones = ""
