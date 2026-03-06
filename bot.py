@@ -9,16 +9,15 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────
-BOT_TOKEN        = os.environ["BOT_TOKEN"]
-ADMIN_ID         = int(os.environ["ADMIN_TELEGRAM_ID"])
-COOLDOWN_SECS    = int(os.environ.get("COOLDOWN_SECONDS", 180))
-NO_RESPONSE_MINS = int(os.environ.get("NO_RESPONSE_MINUTES", 60))
+BOT_TOKEN          = os.environ["BOT_TOKEN"]
+ADMIN_ID           = int(os.environ["ADMIN_TELEGRAM_ID"])
+COOLDOWN_SECS      = int(os.environ.get("COOLDOWN_SECONDS", 180))
+NO_RESPONSE_MINS   = int(os.environ.get("NO_RESPONSE_MINUTES", 60))
+SKIP_WINDOW_MINS   = 20   # unanswered check-in within this window → skip silently
+SAFE_WINDOW_MINS   = 20   # confirmed safe within this window → skip + notify admin
 
 # ─────────────────────────────────────────
 # ZONE DEFINITIONS
-# Each zone has a list of Hebrew keywords that appear in oref city names.
-# "Whole Center" covers all of Gush Dan — if ANY of these appear in the
-# alert, the whole-center zone (and all members) are considered affected.
 # ─────────────────────────────────────────
 ZONES = {
     "Tel Aviv":       ["תל אביב"],
@@ -30,11 +29,8 @@ ZONES = {
     "Bat Yam":        ["בת ים"],
     "Rishon LeZion":  ["ראשון לציון"],
     "Whole Center":   [
-        # Broad area keyword oref uses for the whole Gush Dan center
         "גוש דן",
-        # Tel Aviv
         "תל אביב",
-        # Core Gush Dan cities only
         "רמת גן", "גבעתיים", "בני ברק", "פתח תקווה",
         "חולון", "בת ים", "בת-ים", "אור יהודה",
         "קריית אונו", "גבעת שמואל", "רמת השרון", "הרצליה",
@@ -78,10 +74,8 @@ def get_hit_zones(alert_cities: list) -> list:
 def member_is_affected(member_zone: str, hit_zones: list) -> bool:
     if not member_zone or member_zone == "🌍 Abroad":
         return False
-    # If alert covers whole center, everyone in Israel is affected
     if "Whole Center" in hit_zones:
         return True
-    # If member is in whole center zone, any alert affects them
     if member_zone == "Whole Center":
         return True
     return member_zone in hit_zones
@@ -102,7 +96,7 @@ def who_is_affected_text(hit_zones: list) -> str:
 def zone_keyboard():
     buttons = []
     row = []
-    for i, zone_name in enumerate(ZONES.keys()):
+    for zone_name in ZONES.keys():
         row.append(InlineKeyboardButton(zone_name, callback_data=f"zone:{zone_name}"))
         if len(row) == 2:
             buttons.append(row)
@@ -212,6 +206,56 @@ async def handle_name_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 # ─────────────────────────────────────────
+# /PING — any approved member can check on the family
+# ─────────────────────────────────────────
+async def cmd_ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid    = update.effective_user.id
+    member = db.get_member(uid)
+    if not member or member["status"] != "approved":
+        await update.message.reply_text("❌ You need to be an approved member to send a ping.")
+        return
+
+    sender_name = member["name"]
+    event_id    = db.log_alert_end(zones=f"Ping from {sender_name}", is_test=False)
+
+    global current_event_id
+    current_event_id = event_id
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ I'm OK",    callback_data=f"ok:{event_id}"),
+        InlineKeyboardButton("❗ Need Help", callback_data=f"help:{event_id}"),
+    ]])
+
+    members = db.get_approved_members()
+    sent = 0
+    for m in members:
+        if m["telegram_id"] == uid:
+            continue  # don't ping yourself
+        try:
+            if is_observer(m):
+                # Observers just get the notification, no buttons
+                await ctx.bot.send_message(
+                    chat_id=m["telegram_id"],
+                    text=f"💛 *{sender_name}* is checking in on the family.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await ctx.bot.send_message(
+                    chat_id=m["telegram_id"],
+                    text=f"💛 *{sender_name} wants to know you're OK.*\n\nAre you safe?",
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            sent += 1
+        except Exception as e:
+            logger.error(f"Ping failed to {m['name']}: {e}")
+
+    await update.message.reply_text(
+        f"✅ Ping sent to {sent} people. You'll see their responses as they come in."
+    )
+    logger.info(f"Ping sent by {sender_name} to {sent} members")
+
+# ─────────────────────────────────────────
 # CALLBACKS
 # ─────────────────────────────────────────
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -220,6 +264,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data  = query.data
     uid   = query.from_user.id
 
+    # ── Zone selection during onboarding ──
     if data.startswith("zone:"):
         zone_name = data.split(":", 1)[1]
         member = db.get_member(uid)
@@ -233,8 +278,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "🌍 Got it — you're set as an *Observer*.\n\n"
                 "You'll receive:\n"
                 "• 🚨 Alert notifications when family is affected\n"
-                "• ✅ Updates as each person checks in\n"
-                "• ⚠️ Escalations if someone doesn't respond\n\n"
+                "• ✅ Updates as each person checks in\n\n"
                 "You won't be asked to check in yourself.\n\n"
                 "Waiting for admin approval... 🙏"
             )
@@ -258,6 +302,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Admin approve/reject ──
     if data.startswith("approve:") or data.startswith("reject:"):
         if uid != ADMIN_ID:
             return
@@ -281,15 +326,19 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     text=(
                         "🎉 You've been approved as an *Observer!*\n\n"
                         "You'll now receive real-time updates whenever family members "
-                        "are experiencing rocket alerts — without being asked to check in yourself.\n\n"
-                        "Stay safe 🙏"
+                        "are experiencing rocket alerts.\n\nStay safe 🙏"
                     ),
                     parse_mode="Markdown"
                 )
             else:
                 await ctx.bot.send_message(
                     chat_id=target_uid,
-                    text=(f"🎉 You've been approved!\n\n📍 Your alert zone: *{zone}*\n\nYou'll receive safety check-ins after rocket alerts in your area."),
+                    text=(
+                        f"🎉 You've been approved!\n\n"
+                        f"📍 Your alert zone: *{zone}*\n\n"
+                        f"You'll receive safety check-ins after rocket alerts in your area.\n\n"
+                        f"You can also send /ping anytime to check on the family."
+                    ),
                     parse_mode="Markdown"
                 )
         else:
@@ -298,6 +347,33 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=target_uid, text="❌ Your request was not approved. Contact the admin.")
         return
 
+    # ── Admin override: force re-send check-in to a skipped member ──
+    if data.startswith("override:"):
+        if uid != ADMIN_ID:
+            return
+        parts = data.split(":")
+        target_uid = int(parts[1])
+        event_id   = parts[2]
+        member = db.get_member(target_uid)
+        if not member:
+            return
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ I'm OK",    callback_data=f"ok:{event_id}"),
+            InlineKeyboardButton("❗ Need Help", callback_data=f"help:{event_id}"),
+        ]])
+        try:
+            await ctx.bot.send_message(
+                chat_id=target_uid,
+                text=f"🚨 *Rocket alert — please confirm you're safe, {member['name']}.*",
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+            await query.edit_message_text(f"✅ Override sent to {member['name']}.", parse_mode="Markdown")
+        except Exception as e:
+            await query.edit_message_text(f"❌ Failed to reach {member['name']}: {e}")
+        return
+
+    # ── Check-in response (ok / help) ──
     if ":" in data:
         action, event_id = data.split(":", 1)
         if action not in ("ok", "help"):
@@ -428,16 +504,21 @@ async def poll_alerts(app: Application):
             await asyncio.sleep(1)
 
 # ─────────────────────────────────────────
-# SEND CHECK-INS
+# SEND CHECK-INS (with spam prevention)
 # ─────────────────────────────────────────
 async def send_checkins(bot: Bot, event_id: str, hit_zones: list, is_test=False):
-    members  = db.get_approved_members()
+    members   = db.get_approved_members()
+    now       = time.time()
+    skip_secs = SKIP_WINDOW_MINS * 60
+    safe_secs = SAFE_WINDOW_MINS * 60
+    zones_str  = ", ".join(z for z in hit_zones if z != "🌍 Abroad")
+    test_label = "🧪 *TEST* — " if is_test else ""
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ I'm OK",    callback_data=f"ok:{event_id}"),
         InlineKeyboardButton("❗ Need Help", callback_data=f"help:{event_id}"),
     ]])
-    zones_str  = ", ".join(z for z in hit_zones if z != "🌍 Abroad")
-    test_label = "🧪 *TEST* — " if is_test else ""
+
     sent = 0
     for m in members:
         if is_observer(m):
@@ -445,16 +526,53 @@ async def send_checkins(bot: Bot, event_id: str, hit_zones: list, is_test=False)
         member_zone = m.get("zone") or ""
         if not is_test and not member_is_affected(member_zone, hit_zones):
             continue
+
+        uid = m["telegram_id"]
+
+        if not is_test:
+            last_sent     = db.get_last_checkin_sent_time(uid)
+            last_response = db.get_latest_response_with_time(uid)
+            last_resp_val  = last_response["response"] if last_response else None
+            last_resp_time = last_response["responded_at"] if last_response else 0
+
+            if last_sent and (now - last_sent) < skip_secs:
+                if last_resp_val == "help":
+                    # Always re-ask if they previously said help
+                    pass
+                elif last_resp_val == "ok" and (now - last_resp_time) < safe_secs:
+                    # Confirmed safe recently — notify admin with override
+                    mins_ago = int((now - last_resp_time) / 60)
+                    override_keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            f"📨 Re-send to {m['name']}",
+                            callback_data=f"override:{uid}:{event_id}"
+                        )
+                    ]])
+                    await bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"⏭ *{m['name']}* confirmed safe {mins_ago}m ago — skipping check-in.\nTap below to force re-send.",
+                        parse_mode="Markdown",
+                        reply_markup=override_keyboard
+                    )
+                    logger.info(f"Skipped {m['name']} — confirmed safe {mins_ago}m ago")
+                    continue
+                elif last_resp_val is None:
+                    # Unanswered check-in still pending — skip silently
+                    logger.info(f"Skipped {m['name']} — unanswered check-in still pending")
+                    continue
+
         try:
             await bot.send_message(
-                chat_id=m["telegram_id"],
+                chat_id=uid,
                 text=(f"{test_label}🚨 *Rocket alert just ended.*\n📍 _{zones_str}_\n\nAre you safe, {m['name']}?"),
                 parse_mode="Markdown",
                 reply_markup=keyboard
             )
+            db.record_checkin_sent(uid)
             sent += 1
         except Exception as e:
             logger.error(f"Failed to reach {m['name']}: {e}")
+
     logger.info(f"Check-ins sent to {sent} members")
     asyncio.create_task(escalation_loop(bot, event_id))
 
@@ -531,11 +649,12 @@ async def main():
     app.add_handler(CommandHandler("status",  cmd_status))
     app.add_handler(CommandHandler("test",    cmd_test))
     app.add_handler(CommandHandler("members", cmd_members))
+    app.add_handler(CommandHandler("ping",    cmd_ping))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name_input))
     await app.initialize()
     await app.start()
-    logger.info("🤖 Bot running with Observer mode...")
+    logger.info("🤖 Bot running...")
     await asyncio.gather(poll_alerts(app), app.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES))
 
 if __name__ == "__main__":
