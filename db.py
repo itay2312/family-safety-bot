@@ -1,4 +1,4 @@
-import pg8000.native, ssl, os, time, uuid
+import pg8000.native, ssl, os, time, uuid, json
 
 def _parse_url():
     url = os.environ["DATABASE_URL"]
@@ -55,11 +55,103 @@ def init():
             UNIQUE(event_id, telegram_id)
         )
     """)
+    # Shared state table — used instead of files so Flask + bot can communicate
+    con.run("""
+        CREATE TABLE IF NOT EXISTS kv_store (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at BIGINT
+        )
+    """)
     try:
         con.run("ALTER TABLE alert_events ADD COLUMN response_count INTEGER DEFAULT 0")
     except Exception:
         pass
     con.close()
+
+# ── KV helpers ────────────────────────────────────────────────────────────────
+
+def _kv_set(key, value):
+    con = _conn()
+    con.run(
+        "INSERT INTO kv_store (key, value, updated_at) VALUES (:k, :v, :ts) "
+        "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = :ts",
+        k=key, v=value, ts=int(time.time())
+    )
+    con.close()
+
+def _kv_get(key):
+    con = _conn()
+    rows = con.run("SELECT value FROM kv_store WHERE key = :k", k=key)
+    con.close()
+    return rows[0][0] if rows else None
+
+def _kv_get_ts(key):
+    con = _conn()
+    rows = con.run("SELECT value, updated_at FROM kv_store WHERE key = :k", k=key)
+    con.close()
+    if rows:
+        return rows[0][0], rows[0][1]
+    return None, None
+
+# ── Poller ping ───────────────────────────────────────────────────────────────
+
+def update_ping_timestamp():
+    _kv_set("last_ping", str(time.time()))
+
+def get_ping_timestamp():
+    val = _kv_get("last_ping")
+    return float(val) if val else None
+
+# ── Webhook alert queue ───────────────────────────────────────────────────────
+# Flask writes here; bot.py reads and clears it.
+
+def push_webhook_alert(alert_id, cities):
+    """Store incoming alert from GCP poller. Bot polls this."""
+    _kv_set("pending_alert", json.dumps({"id": alert_id, "cities": cities}))
+
+def pop_webhook_alert():
+    """Read and clear the pending alert. Returns dict or None."""
+    val, _ = _kv_get_ts("pending_alert")
+    if not val:
+        return None
+    con = _conn()
+    con.run("DELETE FROM kv_store WHERE key = 'pending_alert'")
+    con.close()
+    try:
+        return json.loads(val)
+    except Exception:
+        return None
+
+# ── Test trigger ──────────────────────────────────────────────────────────────
+
+def push_test_trigger():
+    _kv_set("test_trigger", "1")
+
+def pop_test_trigger():
+    val = _kv_get("test_trigger")
+    if not val:
+        return False
+    con = _conn()
+    con.run("DELETE FROM kv_store WHERE key = 'test_trigger'")
+    con.close()
+    return True
+
+# ── Alert state (so dashboard can read what bot is doing) ─────────────────────
+
+def set_alert_state(status, zones=""):
+    _kv_set("alert_state", json.dumps({"status": status, "zones": zones}))
+
+def get_alert_state():
+    val = _kv_get("alert_state")
+    if not val:
+        return {"status": "IDLE", "zones": ""}
+    try:
+        return json.loads(val)
+    except Exception:
+        return {"status": "IDLE", "zones": ""}
+
+# ── Members ───────────────────────────────────────────────────────────────────
 
 def get_member(telegram_id):
     con = _conn()
@@ -109,6 +201,8 @@ def remove_member(telegram_id):
     con = _conn()
     con.run("DELETE FROM members WHERE telegram_id = :uid", uid=telegram_id)
     con.close()
+
+# ── Alert events ──────────────────────────────────────────────────────────────
 
 def log_alert_start():
     pass
