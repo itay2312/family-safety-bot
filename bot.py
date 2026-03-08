@@ -20,23 +20,10 @@ SAFE_WINDOW_MINS   = 20   # confirmed safe within this window → skip + notify 
 # ZONE DEFINITIONS
 # ─────────────────────────────────────────
 ZONES = {
-    "Tel Aviv":       ["תל אביב"],
-    "Ramat Gan":      ["רמת גן", "גבעתיים"],
-    "North Tel Aviv": ["רמת השרון", "הרצליה", "גבעת שמואל"],
-    "Petah Tikva":    ["פתח תקווה", "קריית אונו"],
-    "Bnei Brak":      ["בני ברק"],
-    "Holon":          ["חולון"],
-    "Bat Yam":        ["בת ים"],
-    "Rishon LeZion":  ["ראשון לציון"],
-    "Whole Center":   [
-        "גוש דן",
-        "תל אביב",
-        "רמת גן", "גבעתיים", "בני ברק", "פתח תקווה",
-        "חולון", "בת ים", "בת-ים", "אור יהודה",
-        "קריית אונו", "גבעת שמואל", "רמת השרון", "הרצליה",
-        "יהוד", "מונוסון", "סביון", "גני תקווה",
-    ],
-    "🌍 Abroad":      [],
+    "Tel Aviv":   ["תל אביב"],
+    "Ramat Gan":  ["רמת גן", "גבעתיים"],
+    "Bnei Brak":  ["בני ברק"],
+    "🌍 Abroad":  [],
 }
 
 OREF_URL = "https://www.oref.org.il/WarningMessages/alert/alerts.json"
